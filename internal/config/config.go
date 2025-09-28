@@ -29,7 +29,7 @@ func Load() *Config {
 		MqttHost:              getEnvOrDefault("MQTT_HOST", "backend.christophe.engineering"),
 		MqttPort:              mqttPort,
 		LogLevel:              getEnvOrDefault("LOG_LEVEL", "debug"),
-		SubscriptionTopic:     getEnvOrDefault("SUBSCRIPTION_TOPIC", "FCTS/INGRESS/ENRICH"),
+		SubscriptionTopic:     getEnvOrDefault("SUBSCRIPTION_TOPIC", "cs/v1/state/cr6/#"),
 		NATSHost:              "nats://" + getEnvOrDefault("NATS_HOST", "backend.christophe.engineering"),
 		NATSPort:              natsPort,
 		Subject:               getEnvOrDefault("SUBJECT", "test_stream.fcts"),

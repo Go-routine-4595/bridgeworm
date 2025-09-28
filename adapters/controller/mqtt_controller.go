@@ -49,7 +49,6 @@ func NewMqttController(config *config.Config, useCase usecase.ISubmit, logger *z
 		SubscribeTopic: sub,
 		ClientID:       "bridgework-" + uuid.New().String(),
 	}
-	controller := mqtt.NewMQTTConnector(cfg, logger).WithLogger(logger).WithSubscription(useCase)
 
 	var l zerolog.Logger
 
@@ -59,10 +58,20 @@ func NewMqttController(config *config.Config, useCase usecase.ISubmit, logger *z
 		l = *logger
 	}
 
-	return &MqttController{
-		controller: controller,
-		useCase:    useCase,
-		logger:     &l,
+	c := &MqttController{
+		useCase: useCase,
+		logger:  &l,
+	}
+	controller := mqtt.NewMQTTConnector(cfg, logger).WithLogger(logger).WithSubscription(c)
+	c.controller = controller
+
+	return c
+}
+
+func (c *MqttController) OnConnect(topic string, msg []byte) {
+	err := c.useCase.Submit(topic, msg)
+	if err != nil {
+		c.logger.Error().Err(err).Str("topic", topic).Msg("error on submitting message")
 	}
 }
 

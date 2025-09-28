@@ -12,6 +12,7 @@ import (
 	"github.com/Go-routine-4595/bridgeworm/domain"
 	"github.com/Go-routine-4595/bridgeworm/internal/config"
 	"github.com/Go-routine-4595/bridgeworm/service"
+
 	"github.com/rs/zerolog"
 )
 

@@ -7,11 +7,14 @@ import (
 	"os"
 	"time"
 
-	"github.com/Go-routine-4595/bridgeworm/usecase"
 	mqtt "github.com/eclipse/paho.mqtt.golang"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
+
+type IMessageHandler interface {
+	OnConnect(topic string, message []byte)
+}
 
 type Message struct {
 	mqtt.Message
@@ -58,10 +61,10 @@ func (c *MQTTConfig) WithSubscribeTopic(topic string) *MQTTConfig {
 
 // MQTTConnector main class for processing MQTT messages and converting to FCTS format
 type MQTTConnector struct {
-	config      *MQTTConfig
-	client      mqtt.Client
-	logger      *zerolog.Logger
-	processData usecase.ISubmit
+	config     *MQTTConfig
+	client     mqtt.Client
+	logger     *zerolog.Logger
+	msgHandler IMessageHandler
 }
 
 // NewMQTTConnector creates a new MQTT connector instance
@@ -83,8 +86,8 @@ func NewMQTTConnector(config *MQTTConfig, l *zerolog.Logger) *MQTTConnector {
 	return connector
 }
 
-func (m *MQTTConnector) WithSubscription(usecase usecase.ISubmit) *MQTTConnector {
-	m.processData = usecase
+func (m *MQTTConnector) WithSubscription(msgHandler IMessageHandler) *MQTTConnector {
+	m.msgHandler = msgHandler
 	return m
 }
 
@@ -130,6 +133,9 @@ func (m *MQTTConnector) onConnect(client mqtt.Client) {
 	if m.config.SubscribeTopic == nil {
 		return
 	}
+	if m.msgHandler == nil {
+		m.logger.Fatal().Msg("Message handler not set")
+	}
 	token := client.Subscribe(*m.config.SubscribeTopic, 0, m.onMessage)
 	if token.Wait() && token.Error() != nil {
 		m.logger.Error().Msgf("Failed to subscribe to %s: %v", *m.config.SubscribeTopic, token.Error())
@@ -140,10 +146,7 @@ func (m *MQTTConnector) onConnect(client mqtt.Client) {
 }
 
 func (m *MQTTConnector) onMessage(client mqtt.Client, msg mqtt.Message) {
-	err := m.processData.Submit(msg.Topic(), msg.Payload())
-	if err != nil {
-		m.logger.Error().Msgf("Error sending channel full message: %v message: %s", err, string(msg.Payload()))
-	}
+	m.msgHandler.OnConnect(msg.Topic(), msg.Payload())
 }
 
 // onDisconnect callback for MQTT disconnection
