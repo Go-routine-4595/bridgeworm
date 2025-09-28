@@ -1,0 +1,7 @@
+nats consumer add test_stream.fcts my_consumer --pull
+nats consumer info test_stream.fcts my_consumer
+nats consumer next test_stream.fcts my_consumer
+
+nats --server=nats://backend.christophe.engineering:4222 stream list
+
+nats --server=nats://backend.christophe.engineering:4222 stream info test_stream
