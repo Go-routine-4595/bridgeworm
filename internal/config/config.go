@@ -1,14 +1,17 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"strconv"
+
+	"github.com/rs/zerolog/log"
 )
 
 type Config struct {
 	MqttHost              string
 	MqttPort              int
-	SubscriptionTopic     string
+	SubscriptionTopic     []string
 	NATSHost              string
 	NATSPort              int
 	Subject               string
@@ -24,15 +27,17 @@ func Load() *Config {
 	mqttPort, _ := strconv.Atoi(getEnvOrDefault("MQTT_PORT", "8883"))
 	natsPort, _ := strconv.Atoi(getEnvOrDefault("NATS_PORT", "4222"))
 	dynatraceEnabled, _ := strconv.ParseBool(getEnvOrDefault("DYNATRACE_ENABLED", "false"))
+	subscriptionTopicRaw := getEnvOrDefault("SUBSCRIPTION_TOPIC", `["cs/v1/data/#","cs/v1/state/#"]`)
+	topics := getTopics(subscriptionTopicRaw)
 
 	return &Config{
 		MqttHost:              getEnvOrDefault("MQTT_HOST", "backend.christophe.engineering"),
 		MqttPort:              mqttPort,
-		LogLevel:              getEnvOrDefault("LOG_LEVEL", "debug"),
-		SubscriptionTopic:     getEnvOrDefault("SUBSCRIPTION_TOPIC", "cs/v1/state/cr6/#"),
+		LogLevel:              getEnvOrDefault("LOG_LEVEL", "info"),
+		SubscriptionTopic:     topics,
 		NATSHost:              "nats://" + getEnvOrDefault("NATS_HOST", "backend.christophe.engineering"),
 		NATSPort:              natsPort,
-		Subject:               getEnvOrDefault("SUBJECT", "test_stream.fcts"),
+		Subject:               getEnvOrDefault("SUBJECT", "test_stream."),
 		User:                  getEnvOrDefault("USER", ""),
 		Password:              getEnvOrDefault("PASSWORD", ""),
 		LogFilePath:           getEnvOrDefault("LOG_FILE_PATH", "logs"),
@@ -46,4 +51,28 @@ func getEnvOrDefault(key, defaultValue string) string {
 		return value
 	}
 	return defaultValue
+}
+
+func getTopics(s string) []string {
+	var raw interface{}
+
+	if len(s) == 0 {
+		return []string{}
+	}
+	if err := json.Unmarshal([]byte(s), &raw); err != nil {
+		log.Panic().Err(err).Msgf("Error unmarshalling topics: %s", s)
+	}
+	switch raw := raw.(type) {
+	case []interface{}:
+		topics := make([]string, len(raw))
+		for i, topic := range raw {
+			topics[i] = topic.(string)
+		}
+		return topics
+	case string:
+		return []string{raw}
+	default:
+		log.Panic().Msgf("Error unexpected topics type: %s", s)
+	}
+	return []string{}
 }

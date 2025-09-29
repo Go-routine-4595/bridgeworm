@@ -27,7 +27,7 @@ type MQTTConfig struct {
 	Keepalive      int
 	Username       *string
 	Password       *string
-	SubscribeTopic *string
+	SubscribeTopic *[]string
 	ClientID       string
 }
 
@@ -54,7 +54,7 @@ func (c *MQTTConfig) WithPassword(password string) *MQTTConfig {
 	return c
 }
 
-func (c *MQTTConfig) WithSubscribeTopic(topic string) *MQTTConfig {
+func (c *MQTTConfig) WithSubscribeTopic(topic []string) *MQTTConfig {
 	c.SubscribeTopic = &topic
 	return c
 }
@@ -136,7 +136,11 @@ func (m *MQTTConnector) onConnect(client mqtt.Client) {
 	if m.msgHandler == nil {
 		m.logger.Fatal().Msg("Message handler not set")
 	}
-	token := client.Subscribe(*m.config.SubscribeTopic, 0, m.onMessage)
+
+	var token mqtt.Token
+	for _, topic := range *m.config.SubscribeTopic {
+		token = client.Subscribe(topic, 0, m.onMessage)
+	}
 	if token.Wait() && token.Error() != nil {
 		m.logger.Error().Msgf("Failed to subscribe to %s: %v", *m.config.SubscribeTopic, token.Error())
 		return

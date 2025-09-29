@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -14,6 +15,10 @@ import (
 	"github.com/Go-routine-4595/bridgeworm/service"
 
 	"github.com/rs/zerolog"
+)
+
+const (
+	flushMessageTimeout = time.Millisecond * 250
 )
 
 type ISubmit interface {
@@ -61,6 +66,8 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 
 	worker := service.NewService()
 	natsConn := gateways.NewNatsConnector(wp.natsUrl, &wp.logger)
+	c := time.NewTicker(flushMessageTimeout)
+	defer c.Stop()
 	for {
 		select {
 		case job, ok := <-wp.jobQueue:
@@ -68,8 +75,11 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 				wp.logger.Info().Msgf("Worker %d: shutting down", id)
 				return
 			}
-			wp.processMessage(job, worker, natsConn)
+			wp.processMessage(job, worker, natsConn, id)
 
+		case <-c.C:
+			wp.logger.Debug().Msgf("Worker %d: Flushing message", id)
+			natsConn.Flush()
 		case <-ctx.Done():
 			wp.logger.Info().Msgf("Worker %d: shutting down context cancelled", id)
 			natsConn.Close()
@@ -78,20 +88,24 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 	}
 }
 
-func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Service, con *gateways.NatsConnector) {
+func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Service, con *gateways.NatsConnector, id int) {
 	var err error
 
 	defer func(now time.Time) {
 		elapsed := time.Since(now)
 		if err != nil {
-			wp.logger.Error().Err(err).Msgf("message processing took %s", elapsed)
+			wp.logger.Error().Err(err).Msgf("message processing took %s -- worker id: %d ", elapsed, id)
 		} else {
-			wp.logger.Info().Msgf("message processing took %s", elapsed)
+			wp.logger.Info().Msgf("message processing took %s -- worker id: %d ", elapsed, id)
 		}
 	}(time.Now())
 
 	NatsMsg := worker.ProcessMessage(job)
-	err = con.Publish(wp.subject, NatsMsg.Byte)
+	if strings.Contains(NatsMsg.Subject, "unknown") {
+		err = con.Publish(wp.subject+"fcts", NatsMsg.Byte)
+	}
+	err = con.Publish(wp.subject+NatsMsg.Subject, NatsMsg.Byte)
+
 }
 
 func (wp *WorkerPool) Submit(topic string, msg []byte) error {

@@ -8,5 +8,6 @@ type MQTTMessage struct {
 }
 
 type NATSMessage struct {
-	Byte []byte
+	Byte    []byte
+	Subject string
 }

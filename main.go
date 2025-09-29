@@ -56,7 +56,7 @@ func setupLogger(level string, logDir string) zerolog.Logger {
 
 	// Configure lumberjack for log rotation
 	fileWriter := &lumberjack.Logger{
-		Filename:   filepath.Join(logDir, "DataEnricher.log"),
+		Filename:   filepath.Join(logDir, "bridgeworm.log"),
 		MaxSize:    4,  // megabytes
 		MaxBackups: 5,  // number of backups
 		MaxAge:     30, // days
@@ -66,7 +66,10 @@ func setupLogger(level string, logDir string) zerolog.Logger {
 
 	// Create multi-writer (console + file)
 	multi := zerolog.MultiLevelWriter(
-		zerolog.ConsoleWriter{Out: os.Stdout},
+		zerolog.ConsoleWriter{
+			Out:        os.Stdout,
+			TimeFormat: "2006-01-02 15:04:05.000",
+		},
 		fileWriter,
 	)
 
@@ -101,6 +104,8 @@ func printConfig(cfg config.Config, logger *zerolog.Logger) {
 	logger.Info().Str("USER", cfg.User).Msg("MQTT user")
 	logger.Info().Str("PASSWORD", cfg.Password).Msg("MQTT password")
 	logger.Info().Str("LOG_FILE_PATH", cfg.LogFilePath).Msg("Log file path")
-	logger.Info().Str("SUBSCRIPTION_TOPIC", cfg.SubscriptionTopic).Msg("Subscription topic")
+	for _, topic := range cfg.SubscriptionTopic {
+		logger.Info().Str("SUBSCRIPTION_TOPIC", topic).Msg("Subscription topic")
+	}
 	logger.Info().Bool("DYNATRACE_ENABLED", cfg.DynatraceEnabled).Msg("Dynatrace enabled")
 }

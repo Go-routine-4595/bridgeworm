@@ -1,6 +1,10 @@
 package service
 
-import "github.com/Go-routine-4595/bridgeworm/domain"
+import (
+	"strings"
+
+	"github.com/Go-routine-4595/bridgeworm/domain"
+)
 
 type IService interface {
 	ProcessMessage(msg domain.MQTTMessage) domain.NATSMessage
@@ -14,7 +18,17 @@ func NewService() *Service {
 }
 
 func (s *Service) ProcessMessage(msg domain.MQTTMessage) domain.NATSMessage {
+
+	var subject string = "unknown"
+
+	if strings.Contains(msg.SourceTopic, "data") {
+		subject = "data"
+	}
+	if strings.Contains(msg.SourceTopic, "state") {
+		subject = "state"
+	}
 	return domain.NATSMessage{
-		Byte: []byte(msg.Byte),
+		Byte:    []byte(msg.Byte),
+		Subject: subject,
 	}
 }

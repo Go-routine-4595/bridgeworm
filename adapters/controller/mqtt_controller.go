@@ -22,7 +22,7 @@ func NewMqttController(config *config.Config, useCase usecase.ISubmit, logger *z
 	var (
 		user  *string
 		passw *string
-		sub   *string
+		sub   *[]string
 	)
 
 	if config.User != "" {
@@ -35,7 +35,7 @@ func NewMqttController(config *config.Config, useCase usecase.ISubmit, logger *z
 	} else {
 		passw = nil
 	}
-	if config.SubscriptionTopic != "" {
+	if len(config.SubscriptionTopic) != 0 {
 		sub = &config.SubscriptionTopic
 	} else {
 		sub = nil
