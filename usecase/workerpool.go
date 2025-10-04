@@ -62,12 +62,20 @@ func (wp *WorkerPool) Start(ctx context.Context) {
 }
 
 func (wp *WorkerPool) worker(ctx context.Context, id int) {
-	defer wp.wg.Done()
-
 	worker := service.NewService()
 	natsConn := gateways.NewNatsConnector(wp.natsUrl, &wp.logger)
 	c := time.NewTicker(flushMessageTimeout)
-	defer c.Stop()
+
+	defer func() {
+		c.Stop()
+		err := natsConn.Flush()
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("nats flush failed -- worker id: %d -- on exiting", id)
+		}
+		natsConn.Close()
+		wp.wg.Done()
+	}()
+
 	for {
 		select {
 		case job, ok := <-wp.jobQueue:
@@ -79,10 +87,12 @@ func (wp *WorkerPool) worker(ctx context.Context, id int) {
 
 		case <-c.C:
 			wp.logger.Debug().Msgf("Worker %d: Flushing message", id)
-			natsConn.Flush()
+			err := natsConn.Flush()
+			if err != nil {
+				wp.logger.Error().Err(err).Msgf("nats flush failed -- worker id: %d", id)
+			}
 		case <-ctx.Done():
 			wp.logger.Info().Msgf("Worker %d: shutting down context cancelled", id)
-			natsConn.Close()
 			return
 		}
 	}
