@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/Go-routine-4595/bridgeworm/adapters/gateways"
@@ -19,19 +20,56 @@ import (
 
 const (
 	flushMessageTimeout = time.Millisecond * 250
+	metricsInterval     = time.Second * 30
+	maxPoolBufferSize   = 64 * 1024 // 64KB
 )
+
+// Custom pool wrapper to track creation
+type trackedPool struct {
+	pool      *sync.Pool
+	creations *atomic.Uint64
+}
+
+func newTrackedPool(creations *atomic.Uint64) *trackedPool {
+	return &trackedPool{
+		creations: creations,
+		pool: &sync.Pool{
+			New: func() interface{} {
+				// Increment counter when New() is called (= pool miss)
+				creations.Add(1)
+				return &domain.NATSMessage{
+					Byte: make([]byte, 0, 1024),
+				}
+			},
+		},
+	}
+}
+
+func (tp *trackedPool) Get() *domain.NATSMessage {
+	return tp.pool.Get().(*domain.NATSMessage)
+}
+
+func (tp *trackedPool) Put(msg *domain.NATSMessage) {
+	tp.pool.Put(msg)
+}
 
 type ISubmit interface {
 	Submit(topic string, msg []byte) error
 }
 
 type WorkerPool struct {
-	workerCount int
-	jobQueue    chan domain.MQTTMessage
-	wg          sync.WaitGroup
-	logger      zerolog.Logger
-	subject     string
-	natsUrl     string
+	workerCount     int
+	jobQueue        chan domain.MQTTMessage
+	wg              sync.WaitGroup
+	logger          zerolog.Logger
+	subject         string
+	natsUrl         string
+	natsMessagePool *trackedPool
+	// Pool metrics
+	poolGets      atomic.Uint64 // Total Get() calls
+	poolPuts      atomic.Uint64 // Total Put() calls
+	poolDrops     atomic.Uint64 // Buffers too large to return to pool
+	poolCreations atomic.Uint64 // New objects created (proxy for misses)
 }
 
 func NewWorkerPool(cfg config.Config, workerCount int, queueSize int, l *zerolog.Logger) *WorkerPool {
@@ -45,20 +83,110 @@ func NewWorkerPool(cfg config.Config, workerCount int, queueSize int, l *zerolog
 		logger = *l
 	}
 
-	return &WorkerPool{
+	wp := &WorkerPool{
 		workerCount: workerCount,
 		jobQueue:    make(chan domain.MQTTMessage, queueSize),
 		logger:      logger,
 		subject:     cfg.Subject,
 		natsUrl:     cfg.NATSHost + fmt.Sprintf(":%d", cfg.NATSPort),
 	}
+	wp.natsMessagePool = newTrackedPool(&wp.poolCreations)
+	return wp
 }
 
 func (wp *WorkerPool) Start(ctx context.Context) {
+
+	// Pool for NATSMessage structs
 	for i := 0; i < wp.workerCount; i++ {
 		wp.wg.Add(1)
 		go wp.worker(ctx, i)
 	}
+
+	// Start metrics reporter
+	wp.wg.Add(1)
+	go wp.metricsReporter(ctx)
+}
+
+func (wp *WorkerPool) metricsReporter(ctx context.Context) {
+	defer wp.wg.Done()
+
+	ticker := time.NewTicker(metricsInterval)
+	defer ticker.Stop()
+
+	var lastGets, lastCreations uint64
+
+	for {
+		select {
+		case <-ticker.C:
+			gets := wp.poolGets.Load()
+			puts := wp.poolPuts.Load()
+			drops := wp.poolDrops.Load()
+			creations := wp.poolCreations.Load()
+
+			// Calculate metrics since last report
+			getsInPeriod := gets - lastGets
+			creationsInPeriod := creations - lastCreations
+
+			// Calculate hit rate
+			var hitRate float64
+			if getsInPeriod > 0 {
+				hits := getsInPeriod - creationsInPeriod
+				hitRate = (float64(hits) / float64(getsInPeriod)) * 100
+			}
+
+			// Log comprehensive metrics
+			wp.logger.Info().
+				Uint64("pool_gets", gets).
+				Uint64("pool_puts", puts).
+				Uint64("pool_drops", drops).
+				Uint64("pool_creations", creations).
+				Float64("hit_rate_percent", hitRate).
+				Uint64("period_gets", getsInPeriod).
+				Uint64("period_creations", creationsInPeriod).
+				Msg("Pool metrics")
+
+			// Warnings for potential issues
+			if hitRate < 50 && getsInPeriod > 100 {
+				wp.logger.Warn().
+					Float64("hit_rate", hitRate).
+					Msg("Low pool hit rate - consider increasing worker count or investigating GC pressure")
+			}
+
+			if drops > gets/10 { // More than 10% dropped
+				wp.logger.Warn().
+					Uint64("drops", drops).
+					Uint64("total_operations", gets).
+					Msg("High buffer drop rate - messages may be larger than expected")
+			}
+
+			lastGets = gets
+			lastCreations = creations
+
+		case <-ctx.Done():
+			// Final metrics on shutdown
+			wp.logFinalMetrics()
+			return
+		}
+	}
+}
+
+func (wp *WorkerPool) logFinalMetrics() {
+	gets := wp.poolGets.Load()
+	creations := wp.poolCreations.Load()
+
+	var overallHitRate float64
+	if gets > 0 {
+		hits := gets - creations
+		overallHitRate = (float64(hits) / float64(gets)) * 100
+	}
+
+	wp.logger.Info().
+		Uint64("total_gets", gets).
+		Uint64("total_puts", wp.poolPuts.Load()).
+		Uint64("total_drops", wp.poolDrops.Load()).
+		Uint64("total_creations", creations).
+		Float64("overall_hit_rate_percent", overallHitRate).
+		Msg("Final pool metrics")
 }
 
 func (wp *WorkerPool) worker(ctx context.Context, id int) {
@@ -110,11 +238,56 @@ func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Ser
 		}
 	}(time.Now())
 
-	NatsMsg := worker.ProcessMessage(job)
-	if strings.Contains(NatsMsg.Subject, "unknown") {
-		err = con.Publish(wp.subject+"fcts", NatsMsg.Byte)
+	natsMsg := wp.natsMessagePool.Get()
+	defer func() {
+		// Only return reasonable-sized buffers to pool
+		if cap(natsMsg.Byte) <= 64*1024 { // 64KB limit
+			wp.natsMessagePool.Put(natsMsg)
+		}
+		// Large buffers get GC'd instead
+	}()
+
+	// Track pool Get
+	wp.poolGets.Add(1)
+
+	defer func() {
+		bufferSize := cap(natsMsg.Byte)
+
+		if bufferSize <= maxPoolBufferSize {
+			// Reset and return to pool
+			natsMsg.Byte = natsMsg.Byte[:0]
+			natsMsg.Subject = ""
+			wp.natsMessagePool.Put(natsMsg)
+			wp.poolPuts.Add(1)
+		} else {
+			// Buffer too large, don't return to pool
+			wp.poolDrops.Add(1)
+			wp.logger.Debug().
+				Int("buffer_size", bufferSize).
+				Int("max_size", maxPoolBufferSize).
+				Msgf("Dropping oversized buffer from pool -- worker id: %d", id)
+		}
+	}()
+
+	// Reset message
+	natsMsg.Byte = natsMsg.Byte[:0]
+	natsMsg.Subject = ""
+
+	worker.ProcessMessage(job, natsMsg)
+	// Publish
+	if strings.Contains(natsMsg.Subject, "unknown") {
+		err = con.Publish(wp.subject+"fcts", natsMsg.Byte)
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("failed to publish to fcts topic -- worker id: %d", id)
+			return
+		}
+	} else {
+		err = con.Publish(wp.subject+natsMsg.Subject, natsMsg.Byte)
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("failed to publish to %s topic -- worker id: %d", natsMsg.Subject, id)
+			return
+		}
 	}
-	err = con.Publish(wp.subject+NatsMsg.Subject, NatsMsg.Byte)
 
 }
 
@@ -132,6 +305,9 @@ func (wp *WorkerPool) Submit(topic string, msg []byte) error {
 }
 
 func (wp *WorkerPool) Close() {
+	// just to make sure that the MQTT controller is done closing the MQTT connection and doesn't send any more messages
+	time.Sleep(time.Millisecond * 250)
+
 	close(wp.jobQueue)
 	wp.wg.Wait()
 	wp.logger.Info().Msg("UseCase Worker pool Shutting down gracefully...")

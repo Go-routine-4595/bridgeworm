@@ -17,7 +17,7 @@ func NewService() *Service {
 	return &Service{}
 }
 
-func (s *Service) ProcessMessage(msg domain.MQTTMessage) domain.NATSMessage {
+func (s *Service) ProcessMessage(msg domain.MQTTMessage, natsMsg *domain.NATSMessage) {
 
 	var subject string = "unknown"
 
@@ -27,8 +27,9 @@ func (s *Service) ProcessMessage(msg domain.MQTTMessage) domain.NATSMessage {
 	if strings.Contains(msg.SourceTopic, "state") {
 		subject = "state"
 	}
-	return domain.NATSMessage{
-		Byte:    []byte(msg.Byte),
-		Subject: subject,
-	}
+
+	natsMsg.Subject = subject
+
+	// Reuse the byte slice capacity if possible
+	natsMsg.Byte = append(natsMsg.Byte, msg.Byte...)
 }
