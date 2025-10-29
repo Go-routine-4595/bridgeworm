@@ -24,35 +24,6 @@ const (
 	maxPoolBufferSize   = 64 * 1024 // 64KB
 )
 
-// Custom pool wrapper to track creation
-type trackedPool struct {
-	pool      *sync.Pool
-	creations *atomic.Uint64
-}
-
-func newTrackedPool(creations *atomic.Uint64) *trackedPool {
-	return &trackedPool{
-		creations: creations,
-		pool: &sync.Pool{
-			New: func() interface{} {
-				// Increment counter when New() is called (= pool miss)
-				creations.Add(1)
-				return &domain.NATSMessage{
-					Byte: make([]byte, 0, 1024),
-				}
-			},
-		},
-	}
-}
-
-func (tp *trackedPool) Get() *domain.NATSMessage {
-	return tp.pool.Get().(*domain.NATSMessage)
-}
-
-func (tp *trackedPool) Put(msg *domain.NATSMessage) {
-	tp.pool.Put(msg)
-}
-
 type ISubmit interface {
 	Submit(topic string, msg []byte) error
 }
@@ -99,7 +70,10 @@ func (wp *WorkerPool) Start(ctx context.Context) {
 	// Pool for NATSMessage structs
 	for i := 0; i < wp.workerCount; i++ {
 		wp.wg.Add(1)
-		go wp.worker(ctx, i)
+		// using nats connector
+		// go wp.worker(ctx, i)
+		// using jetstream connector
+		go wp.workerJet(ctx, i)
 	}
 
 	// Start metrics reporter
@@ -234,7 +208,7 @@ func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Ser
 		if err != nil {
 			wp.logger.Error().Err(err).Msgf("message processing took %s -- worker id: %d ", elapsed, id)
 		} else {
-			wp.logger.Info().Msgf("message processing took %s -- worker id: %d ", elapsed, id)
+			wp.logger.Debug().Msgf("message processing took %s -- worker id: %d ", elapsed, id)
 		}
 	}(time.Now())
 
@@ -291,6 +265,97 @@ func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Ser
 
 }
 
+// JetStream version for testing
+func (wp *WorkerPool) workerJet(ctx context.Context, id int) {
+	worker := service.NewService()
+	jetConn := gateways.NewStreamConnector(wp.natsUrl, &wp.logger)
+
+	defer func() {
+		jetConn.Close()
+		wp.wg.Done()
+	}()
+
+	for {
+		select {
+		case job, ok := <-wp.jobQueue:
+			if !ok {
+				wp.logger.Info().Msgf("Worker %d: shutting down", id)
+				return
+			}
+			wp.processMessageJet(job, worker, jetConn, id)
+		case <-ctx.Done():
+			wp.logger.Info().Msgf("Worker %d: shutting down context cancelled", id)
+			return
+		}
+	}
+}
+
+func (wp *WorkerPool) processMessageJet(job domain.MQTTMessage, worker *service.Service, con *gateways.StreamConnector, id int) {
+	var err error
+
+	defer func(now time.Time) {
+		elapsed := time.Since(now)
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("message processing took %s -- worker id: %d ", elapsed, id)
+		} else {
+			wp.logger.Debug().Msgf("message processing took %s -- worker id: %d ", elapsed, id)
+		}
+	}(time.Now())
+
+	natsMsg := wp.natsMessagePool.Get()
+	defer func() {
+		// Only return reasonable-sized buffers to pool
+		if cap(natsMsg.Byte) <= 64*1024 { // 64KB limit
+			wp.natsMessagePool.Put(natsMsg)
+		}
+		// Large buffers get GC'd instead
+	}()
+
+	// Track pool Get
+	wp.poolGets.Add(1)
+
+	defer func() {
+		bufferSize := cap(natsMsg.Byte)
+
+		if bufferSize <= maxPoolBufferSize {
+			// Reset and return to pool
+			natsMsg.Byte = natsMsg.Byte[:0]
+			natsMsg.Subject = ""
+			wp.natsMessagePool.Put(natsMsg)
+			wp.poolPuts.Add(1)
+		} else {
+			// Buffer too large, don't return to pool
+			wp.poolDrops.Add(1)
+			wp.logger.Debug().
+				Int("buffer_size", bufferSize).
+				Int("max_size", maxPoolBufferSize).
+				Msgf("Dropping oversized buffer from pool -- worker id: %d", id)
+		}
+	}()
+
+	// Reset message
+	natsMsg.Byte = natsMsg.Byte[:0]
+	natsMsg.Subject = ""
+
+	worker.ProcessMessage(job, natsMsg)
+	// Publish
+	if strings.Contains(natsMsg.Subject, "unknown") {
+		err = con.PublishAsync(wp.subject+"fcts", natsMsg.Byte)
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("failed to publish to fcts topic -- worker id: %d", id)
+			return
+		}
+	} else {
+		err = con.PublishAsync(wp.subject+natsMsg.Subject, natsMsg.Byte)
+		if err != nil {
+			wp.logger.Error().Err(err).Msgf("failed to publish to %s topic -- worker id: %d", natsMsg.Subject, id)
+			return
+		}
+	}
+
+}
+
+// -----------------------------
 func (wp *WorkerPool) Submit(topic string, msg []byte) error {
 	mqttMsg := domain.MQTTMessage{
 		SourceTopic: topic,

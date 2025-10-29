@@ -2,9 +2,12 @@ package main
 
 import (
 	"context"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -18,8 +21,15 @@ import (
 )
 
 func main() {
+
+	go func() {
+		http.ListenAndServe("localhost:6060", nil)
+	}()
+
 	// Load configuration
 	cfg := config.Load()
+
+	workerPoolSize := 2 * runtime.NumCPU()
 
 	// Setup context for cancellation
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
@@ -31,7 +41,7 @@ func main() {
 	printConfig(*cfg, &logger)
 
 	// use case
-	useCase := usecase.NewWorkerPool(*cfg, 5, 100, &logger)
+	useCase := usecase.NewWorkerPool(*cfg, workerPoolSize, 100, &logger)
 	useCase.Start(ctx)
 
 	// Setup MQTT controller
