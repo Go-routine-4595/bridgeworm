@@ -213,14 +213,6 @@ func (wp *WorkerPool) processMessage(job domain.MQTTMessage, worker *service.Ser
 	}(time.Now())
 
 	natsMsg := wp.natsMessagePool.Get()
-	defer func() {
-		// Only return reasonable-sized buffers to pool
-		if cap(natsMsg.Byte) <= 64*1024 { // 64KB limit
-			wp.natsMessagePool.Put(natsMsg)
-		}
-		// Large buffers get GC'd instead
-	}()
-
 	// Track pool Get
 	wp.poolGets.Add(1)
 
@@ -303,14 +295,6 @@ func (wp *WorkerPool) processMessageJet(job domain.MQTTMessage, worker *service.
 	}(time.Now())
 
 	natsMsg := wp.natsMessagePool.Get()
-	defer func() {
-		// Only return reasonable-sized buffers to pool
-		if cap(natsMsg.Byte) <= 64*1024 { // 64KB limit
-			wp.natsMessagePool.Put(natsMsg)
-		}
-		// Large buffers get GC'd instead
-	}()
-
 	// Track pool Get
 	wp.poolGets.Add(1)
 
