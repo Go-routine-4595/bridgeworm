@@ -47,7 +47,7 @@ func NewMqttController(config *config.Config, useCase usecase.ISubmit, logger *z
 		Username:       user,
 		Password:       passw,
 		SubscribeTopic: sub,
-		ClientID:       "bridgework-" + uuid.New().String(),
+		ClientID:       "bridgeworm-" + uuid.New().String(),
 	}
 
 	var l zerolog.Logger
