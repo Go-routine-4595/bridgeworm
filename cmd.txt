@@ -1,0 +1,28 @@
+docker build -t christophe2bu/bridgeworm:latest .
+docker push christophe2bu/bridgeworm:latest
+
+-------- mulitarch build
+## Create and use buildx builder (only needed once)
+ docker buildx create --name mybuilder --use
+ docker buildx inspect --bootstrap
+
+ # Build and push for multiple architectures
+ docker buildx build \
+   --platform linux/amd64,linux/arm64,linux/arm/v7 \
+   -t christophe2bu/bridgeworm:latest \
+   --push \
+   .
+
+   # Just AMD64 and ARM64 (most common)
+   docker buildx build \
+     --platform linux/amd64,linux/arm64 \
+     -t christophe2bu/bridgeworm:latest \
+     --push \
+     .
+
+ docker manifest inspect christophe2bu/bridgeworm:latest
+
+
+ -------------
+ docker build --platform linux/amd64 -t christophe2bu/bridgeworm:latest .
+ docker push christophe2bu/bridgeworm:latest

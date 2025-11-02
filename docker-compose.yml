@@ -1,0 +1,24 @@
+version: '3.8'
+
+services:
+  bridgeworm:
+    image: christophe2bu/bridgeworm:latest
+    container_name: bridgeworm-app
+    restart: unless-stopped
+    environment:
+      - MQTT_HOST=172.31.19.68
+      - NATS_HOST=172.31.19.68
+      - LOG_FILE_PATH=/app/logs
+    volumes:
+      - /home/ubuntu/bridgeworm/logs:/app/logs
+    logging:
+      driver: local
+      options:
+        max-size: "15m"
+        max-file: "5"
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

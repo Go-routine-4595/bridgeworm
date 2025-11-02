@@ -20,10 +20,14 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
+const (
+	version = "0.0.1"
+)
+
 func main() {
 
 	go func() {
-		http.ListenAndServe("localhost:6060", nil)
+		http.ListenAndServe("0.0.0.0:6060", nil)
 	}()
 
 	// Load configuration
@@ -102,6 +106,7 @@ func setupLogger(level string, logDir string) zerolog.Logger {
 }
 
 func printConfig(cfg config.Config, logger *zerolog.Logger) {
+	logger.Info().Msg("Bridgeworm version " + version)
 	logger.Info().Msg("Configuration:")
 	logger.Info().Str("LOG_LEVEL", cfg.LogLevel).Msg("Log level")
 	logger.Info().Str("MQTT_HOST", cfg.MqttHost).Msg("MQTT host")
