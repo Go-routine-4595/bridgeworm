@@ -24,5 +24,5 @@ docker push christophe2bu/bridgeworm:latest
 
 
  -------------
- docker build --platform linux/amd64 -t christophe2bu/bridgeworm:latest .
- docker push christophe2bu/bridgeworm:latest
+docker build --platform linux/amd64 -t christophe2bu/bridgeworm:latest .
+docker push christophe2bu/bridgeworm:latest

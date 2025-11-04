@@ -36,6 +36,8 @@ type WorkerPool struct {
 	subject         string
 	natsUrl         string
 	natsMessagePool *trackedPool
+	// channel metrics
+	jobQueueLost atomic.Uint64
 	// Pool metrics
 	poolGets      atomic.Uint64 // Total Get() calls
 	poolPuts      atomic.Uint64 // Total Put() calls
@@ -87,7 +89,7 @@ func (wp *WorkerPool) metricsReporter(ctx context.Context) {
 	ticker := time.NewTicker(metricsInterval)
 	defer ticker.Stop()
 
-	var lastGets, lastCreations uint64
+	var lastGets, lastCreations, lastJobQueueLost uint64
 
 	for {
 		select {
@@ -96,10 +98,17 @@ func (wp *WorkerPool) metricsReporter(ctx context.Context) {
 			puts := wp.poolPuts.Load()
 			drops := wp.poolDrops.Load()
 			creations := wp.poolCreations.Load()
+			drops_msg := wp.jobQueueLost.Load()
 
 			// Calculate metrics since last report
 			getsInPeriod := gets - lastGets
 			creationsInPeriod := creations - lastCreations
+
+			drops_msg_period := wp.jobQueueLost.Load() - lastJobQueueLost
+			var jobQueueLostInPeriod float64
+			if drops_msg_period > 0 {
+				jobQueueLostInPeriod = float64(drops_msg_period) / metricsInterval.Seconds()
+			}
 
 			// Calculate hit rate
 			var hitRate float64
@@ -117,6 +126,8 @@ func (wp *WorkerPool) metricsReporter(ctx context.Context) {
 				Float64("hit_rate_percent", hitRate).
 				Uint64("period_gets", getsInPeriod).
 				Uint64("period_creations", creationsInPeriod).
+				Int("jobQueue_count_free", cap(wp.jobQueue)).
+				Float64("jobQueue_lost_rate", jobQueueLostInPeriod).
 				Msg("Pool metrics")
 
 			// Warnings for potential issues
@@ -135,6 +146,7 @@ func (wp *WorkerPool) metricsReporter(ctx context.Context) {
 
 			lastGets = gets
 			lastCreations = creations
+			lastJobQueueLost = drops_msg
 
 		case <-ctx.Done():
 			// Final metrics on shutdown
@@ -160,6 +172,7 @@ func (wp *WorkerPool) logFinalMetrics() {
 		Uint64("total_drops", wp.poolDrops.Load()).
 		Uint64("total_creations", creations).
 		Float64("overall_hit_rate_percent", overallHitRate).
+		Uint64("lost_msg", wp.jobQueueLost.Load()).
 		Msg("Final pool metrics")
 }
 
@@ -349,6 +362,7 @@ func (wp *WorkerPool) Submit(topic string, msg []byte) error {
 	case wp.jobQueue <- mqttMsg:
 		return nil
 	default:
+		wp.jobQueueLost.Add(1)
 		return errors.New("job queue is full")
 	}
 }

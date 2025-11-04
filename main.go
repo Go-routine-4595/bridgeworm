@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	version = "0.0.1"
+	version = "0.1.0"
 )
 
 func main() {
@@ -34,6 +34,7 @@ func main() {
 	cfg := config.Load()
 
 	workerPoolSize := 2 * runtime.NumCPU()
+	//workerPoolSize := 1
 
 	// Setup context for cancellation
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)

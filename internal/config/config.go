@@ -27,7 +27,7 @@ func Load() *Config {
 	mqttPort, _ := strconv.Atoi(getEnvOrDefault("MQTT_PORT", "8883"))
 	natsPort, _ := strconv.Atoi(getEnvOrDefault("NATS_PORT", "4222"))
 	dynatraceEnabled, _ := strconv.ParseBool(getEnvOrDefault("DYNATRACE_ENABLED", "false"))
-	subscriptionTopicRaw := getEnvOrDefault("SUBSCRIPTION_TOPIC", `["cs/v1/data/#","cs/v1/state/#","loadtest/data"]`)
+	subscriptionTopicRaw := getEnvOrDefault("SUBSCRIPTION_TOPIC", `["cs/v1/data/#","cs/v1/state/#", "loadtest/data"]`)
 	topics := getTopics(subscriptionTopicRaw)
 
 	return &Config{
